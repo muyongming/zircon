@@ -14,3 +14,10 @@
 // SOC Interrupt polarity registers start
 #define MT8167_SOC_INT_POL                                  0x620
 
+#define MT8167_USB0_BASE                                    0x11100000
+#define MT8167_USB0_LENGTH                                  0x1000
+
+#define MT8167_USBPHY_BASE                                  0x11110000
+#define MT8167_USBPHY_LENGTH                                0x1000
+
+#define MT8167_USB0_IRQ                                     104

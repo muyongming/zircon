@@ -15,6 +15,12 @@
 
 namespace board_mt8167 {
 
+// BTI IDs for our devices
+enum {
+    BTI_BOARD,
+    BTI_USB_DCI,
+};
+
 class Mt8167;
 using Mt8167Type = ddk::Device<Mt8167>;
 
@@ -35,6 +41,7 @@ private:
     zx_status_t Start();
     zx_status_t SocInit();
     zx_status_t GpioInit();
+    zx_status_t UsbInit();
     int Thread();
 
     ddk::PlatformBusProtocolProxy pbus_;

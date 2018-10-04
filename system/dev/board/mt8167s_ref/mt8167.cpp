@@ -56,8 +56,15 @@ int Mt8167::Thread() {
         zxlogf(ERROR, "SocInit() failed\n");
         return -1;
     }
+    // Load protocol implementation drivers first.
     if (GpioInit() != ZX_OK) {
         zxlogf(ERROR, "GpioInit() failed\n");
+        return -1;
+    }
+
+    // Then the platform device drivers.
+    if (UsbInit() != ZX_OK) {
+        zxlogf(ERROR, "UsbInit() failed\n");
         return -1;
     }
     return 0;
