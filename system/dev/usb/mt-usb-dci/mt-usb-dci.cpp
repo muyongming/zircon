@@ -24,25 +24,19 @@ namespace mt_usb_dci {
 
 zx_status_t MtUsbDci::Create(zx_device_t* parent) {
     platform_device_protocol_t pdev;
-    zx_handle_t bti;
 
     auto status = device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_DEV, &pdev);
     if (status != ZX_OK) {
         return status;
     }
 
-    status = pdev_get_bti(&pdev, 0, &bti);
-    if (status != ZX_OK) {
-        return status;
-    }
-
     fbl::AllocChecker ac;
-    auto dci = fbl::make_unique_checked<MtUsbDci>(&ac, parent, &pdev, bti);
+    auto dci = fbl::make_unique_checked<MtUsbDci>(&ac, parent, &pdev);
     if (!ac.check()) {
         return ZX_ERR_NO_MEMORY;
     }
 
-    status = dci->DdkAdd("mt-usb-dci");
+    status = dci->Init();
     if (status != ZX_OK) {
         return status;
     }
@@ -52,7 +46,65 @@ zx_status_t MtUsbDci::Create(zx_device_t* parent) {
     return ZX_OK;
 }
 
+zx_status_t MtUsbDci::Init() {
+    auto status = pdev_get_bti(&pdev_, 0, bti_.reset_and_get_address());
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    status = pdev_map_mmio_buffer2(&pdev_, 0, ZX_CACHE_POLICY_UNCACHED_DEVICE, &usb_mmio_);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    status = pdev_map_mmio_buffer2(&pdev_, 1, ZX_CACHE_POLICY_UNCACHED_DEVICE, &phy_mmio_);
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    status = pdev_map_interrupt(&pdev_, 0, irq_.reset_and_get_address());
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    int rc = thrd_create_with_name(&irq_thread_,
+                                   [](void* arg) -> int {
+                                       return reinterpret_cast<MtUsbDci*>(arg)->IrqThread();
+                                   },
+                                   reinterpret_cast<void*>(this),
+                                   "mt-usb-dci-irq-thread");
+    if (rc != thrd_success) {
+        return ZX_ERR_INTERNAL;
+    }
+
+    status = DdkAdd("mt-usb-dci");
+    if (status != ZX_OK) {
+        return status;
+    }
+    return ZX_OK;
+}
+
+int MtUsbDci::IrqThread() {
+    while (true) {
+        auto status = irq_.wait(nullptr);
+        if (status == ZX_ERR_CANCELED) {
+            return 0;
+        } else if (status != ZX_OK) {
+            zxlogf(ERROR, "%s: irq_.wait failed: %d\n", __func__, status);
+            return -1;
+        }
+        zxlogf(INFO, "%s: got interrupt!\n", __func__);
+    }
+}
+
+void MtUsbDci::DdkUnbind() {
+    irq_.destroy();
+    thrd_join(irq_thread_, nullptr);
+}
+
 void MtUsbDci::DdkRelease() {
+    mmio_buffer_release(&usb_mmio_);
+    mmio_buffer_release(&phy_mmio_);
     delete this;
 }
 

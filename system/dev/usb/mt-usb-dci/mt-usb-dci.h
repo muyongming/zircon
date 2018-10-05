@@ -4,25 +4,31 @@
 
 #pragma once
 
+#include <ddk/protocol/platform-device.h>
 #include <ddktl/device.h>
-#include <ddktl/protocol/platform-device.h>
+#include <ddktl/mmio.h>
 #include <ddktl/protocol/usb-dci.h>
 #include <fbl/macros.h>
+#include <fbl/unique_ptr.h>
 #include <lib/zx/handle.h>
+#include <lib/zx/interrupt.h>
+
+#include <threads.h>
 
 namespace mt_usb_dci {
 
 class MtUsbDci;
-using MtUsbDciType = ddk::Device<MtUsbDci>;
+using MtUsbDciType = ddk::Device<MtUsbDci, ddk::Unbindable>;
 
 class MtUsbDci : public MtUsbDciType, public ddk::UsbDciProtocol<MtUsbDci> {
 public:
-    explicit MtUsbDci(zx_device_t* parent, platform_device_protocol_t* pdev, zx_handle_t bti)
-        : MtUsbDciType(parent), pdev_(pdev), bti_(bti) {}
+    explicit MtUsbDci(zx_device_t* parent, platform_device_protocol_t* pdev)
+        : MtUsbDciType(parent), pdev_(*pdev) {}
 
     static zx_status_t Create(zx_device_t* parent);
 
     // Device protocol implementation.
+    void DdkUnbind();
     void DdkRelease();
 
     // USB DCI protocol implementation.
@@ -38,9 +44,18 @@ public:
 private:
     DISALLOW_COPY_ASSIGN_AND_MOVE(MtUsbDci);
 
-    ddk::PlatformDevProtocolProxy pdev_;
+    zx_status_t Init();
+    int IrqThread();
+
+    platform_device_protocol_t pdev_;
     usb_dci_interface_t dci_intf_ = {};
     zx::handle bti_;
+
+    mmio_buffer_t usb_mmio_;
+    mmio_buffer_t phy_mmio_;
+
+    zx::interrupt irq_;
+    thrd_t irq_thread_;
 };
 
 } // namespace mt_usb_dci
