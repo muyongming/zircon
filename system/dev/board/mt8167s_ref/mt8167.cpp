@@ -61,6 +61,10 @@ int Mt8167::Thread() {
         zxlogf(ERROR, "GpioInit() failed\n");
         return -1;
     }
+    if (I2cInit() != ZX_OK) {
+        zxlogf(ERROR, "I2cInit() failed\n");
+        return -1;
+    }
 
     // Then the platform device drivers.
     if (UsbInit() != ZX_OK) {
