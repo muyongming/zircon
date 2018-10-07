@@ -28,6 +28,12 @@ zx_status_t Mt8167::I2cInit() {
             .base = MT8167_I2C2_BASE,
             .length = MT8167_I2C2_SIZE,
         },
+        // MMIO for clocks
+        // TODO: move this to a clock driver
+        {
+            .base = MT8167_XO_BASE,
+            .length = MT8167_XO_SIZE,
+        },
     };
 
     pbus_dev_t i2c_dev = {};

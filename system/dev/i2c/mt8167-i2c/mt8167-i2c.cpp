@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 #include <stdint.h>
 #include <string.h>
-#include <threads.h>
 #include <unistd.h>
 
 #include <ddk/binding.h>
@@ -31,7 +30,7 @@ namespace mt8167_i2c {
 constexpr size_t kMaxTransferSize = UINT16_MAX - 1; // More than enough
 
 uint32_t Mt8167I2c::I2cImplGetBusCount() {
-    return dev_cnt_;
+    return bus_count_;
 }
 
 zx_status_t Mt8167I2c::I2cImplGetMaxTransferSize(uint32_t bus_id, size_t* out_size) {
@@ -45,9 +44,6 @@ zx_status_t Mt8167I2c::I2cImplSetBitRate(uint32_t bus_id, uint32_t bitrate) {
 }
 
 zx_status_t Mt8167I2c::I2cImplTransact(uint32_t bus_id, i2c_impl_op_t* ops, size_t count) {
-    if (!atomic_load(&ready_)) {
-        return ZX_ERR_SHOULD_WAIT;
-    }
     zx_status_t status = ZX_OK;
     for (size_t i = 0; i < count; ++i) {
         if (ops[i].address > 0xFF) {
@@ -220,42 +216,19 @@ zx_status_t Mt8167I2c::Write(uint8_t addr, const void* buf, size_t len, bool sto
     return TxData(static_cast<const uint8_t*>(buf), len, stop);
 }
 
-void Mt8167I2c::DdkUnbind() {
-    ShutDown();
-    DdkRemove();
-}
-
 void Mt8167I2c::DdkRelease() {
     delete this;
 }
 
-int Mt8167I2c::Thread() {
-    Reset();
-    ready_.store(true);
-//#define TEST_USB_REGS_READ
-#ifdef TEST_USB_REGS_READ
-    for (int i = 0; i < 0xC; i += 2) {
-        uint8_t data_write = static_cast<uint8_t>(i);
-        uint8_t data_read[2];
-        i2c_impl_op_t ops[] = {
-            {.address = 0x50, .buf = &data_write, .length = 1, .is_read = false, .stop = false},
-            {.address = 0x50, .buf = data_read, .length = 2, .is_read = true, .stop = true},
-        };
-        I2cImplTransact(0, ops, 2);
-        zxlogf(INFO, "USB-C Reg:0x%02X Value:0x%02X%02X\n", i, data_read[1], data_read[0]);
+Mt8167I2c::~Mt8167I2c() {
+    // Do this in the destructor in case we fail before device is added to devmgr.
+    for (mmio_buffer_t& mmio : mmios_) {
+        mmio_buffer_release(&mmio);
     }
-#endif
-    return 0;
+    mmio_buffer_release(&xo_mmio_);
 }
 
-void Mt8167I2c::ShutDown() {
-    thrd_join(thread_, NULL);
-    mmio_.reset();
-}
-
-zx_status_t Mt8167I2c::Bind(int id) {
-    zx_status_t status;
-
+zx_status_t Mt8167I2c::Init() {
     platform_device_protocol_t pdev;
     if (device_get_protocol(parent(), ZX_PROTOCOL_PLATFORM_DEV, &pdev) != ZX_OK) {
         zxlogf(ERROR, "Mt8167I2c::Bind: ZX_PROTOCOL_PLATFORM_DEV not available\n");
@@ -266,75 +239,70 @@ zx_status_t Mt8167I2c::Bind(int id) {
         zxlogf(ERROR, "Mt8167I2c::Bind: ZX_PROTOCOL_PLATFORM_BUS not available\n");
         return ZX_ERR_NOT_SUPPORTED;
     }
-    i2c_impl_protocol_t i2c_proto = {
-        .ops = &ops_,
-        .ctx = this,
-    };
-    pbus_register_protocol(&pbus, ZX_PROTOCOL_I2C_IMPL, &i2c_proto, NULL, NULL);
 
-    mmio_buffer_t mmio;
-    status = pdev_map_mmio_buffer2(&pdev, id, ZX_CACHE_POLICY_UNCACHED_DEVICE, &mmio);
+    pdev_device_info_t info;
+    auto status = pdev_get_device_info(&pdev, &info);
     if (status != ZX_OK) {
-        zxlogf(ERROR, "Mt8167I2c::Bind: pdev_map_mmio_buffer failed: %d\n", status);
-        return status;
+        zxlogf(ERROR, "mt8167_i2c_bind: pdev_get_device_info failed\n");
+        return ZX_ERR_NOT_SUPPORTED;
     }
+
+    // Last MMIO is for XO clock.
+    bus_count_ = info.mmio_count - 1;
 
     fbl::AllocChecker ac;
-    mmio_ = fbl::make_unique_checked<ddk::MmioBuffer>(&ac, mmio);
+    mmios_.reset(new (&ac) mmio_buffer_t[bus_count_], bus_count_);
     if (!ac.check()) {
-        zxlogf(ERROR, "Mt8167I2c::Bind: no memory for MmioBuffer\n");
         return ZX_ERR_NO_MEMORY;
     }
+ 
+    for (uint32_t i = 0; i < bus_count_; i++) {
+        status = pdev_map_mmio_buffer2(&pdev, i, ZX_CACHE_POLICY_UNCACHED_DEVICE, &mmios_[i]);
+        if (status == ZX_OK) {
+            return status;
+        }  
+    }      
+    status = pdev_map_mmio_buffer2(&pdev, bus_count_, ZX_CACHE_POLICY_UNCACHED_DEVICE, &xo_mmio_);
+    if (status == ZX_OK) {
+        return status;
+    }  
 
-    int rc = thrd_create_with_name(&thread_,
-                                   [](void* arg) -> int {
-                                       return reinterpret_cast<Mt8167I2c*>(arg)->Thread();
-                                   },
-                                   this,
-                                   "mt8167-i2c-thread");
-    if (rc != thrd_success) {
-        return ZX_ERR_INTERNAL;
-    }
-
-    auto cleanup = fbl::MakeAutoCall([&]() { ShutDown(); });
-    auto name = fbl::StringPrintf("mt8167-i2c-%d", id);
-    status = DdkAdd(name.c_str());
+    status = DdkAdd("mt8167-i2c");
     if (status != ZX_OK) {
         zxlogf(ERROR, "Mt8167I2c::Bind: DdkAdd failed: %d\n", status);
         return status;
     }
-    cleanup.cancel();
+
+    i2c_impl_protocol_t i2c_proto = {
+        .ops = &ops_,
+        .ctx = this,
+    };
+    status = pbus_register_protocol(&pbus, ZX_PROTOCOL_I2C_IMPL, &i2c_proto, NULL, NULL);
+    if (status != ZX_OK) {
+        zxlogf(ERROR, "Mt8167I2c::Bind: pbus_register_protocol failed: %d\n", status);
+        return status;
+    }
+
     return ZX_OK;
 }
 
 } // namespace mt8167_i2c
 
 extern "C" zx_status_t mt8167_i2c_bind(void* ctx, zx_device_t* parent) {
-    platform_device_protocol_t pdev;
-    if (device_get_protocol(parent, ZX_PROTOCOL_PLATFORM_DEV, &pdev) != ZX_OK) {
-        zxlogf(ERROR, "mt8167_i2c_bind: ZX_PROTOCOL_PLATFORM_DEV not available\n");
-        return ZX_ERR_NOT_SUPPORTED;
-    }
-
-    pdev_device_info_t info;
-    zx_status_t status = pdev_get_device_info(&pdev, &info);
-    if (status != ZX_OK) {
-        zxlogf(ERROR, "mt8167_i2c_bind: pdev_get_device_info failed\n");
-        return ZX_ERR_NOT_SUPPORTED;
-    }
-
     fbl::AllocChecker ac;
-    for (uint32_t i = 0; i < info.mmio_count; i++) {
-        auto dev = fbl::make_unique_checked<mt8167_i2c::Mt8167I2c>(&ac, parent, info.mmio_count);
-        if (!ac.check()) {
-            zxlogf(ERROR, "mt8167_i2c_bind: ZX_ERR_NO_MEMORY\n");
-            return ZX_ERR_NO_MEMORY;
-        }
-        status = dev->Bind(i);
-        if (status == ZX_OK) {
-            // devmgr is now in charge of the memory for dev
-            __UNUSED auto ptr = dev.release();
-        }
+    auto dev = fbl::make_unique_checked<mt8167_i2c::Mt8167I2c>(&ac, parent);
+    if (!ac.check()) {
+        zxlogf(ERROR, "mt8167_i2c_bind: ZX_ERR_NO_MEMORY\n");
+        return ZX_ERR_NO_MEMORY;
     }
-    return status;
+
+    auto status = dev->Init();
+    if (status != ZX_OK) {
+        return status;
+    }
+
+    // devmgr is now in charge of the memory for dev
+    __UNUSED auto ptr = dev.release();
+
+    return ZX_OK;
 }

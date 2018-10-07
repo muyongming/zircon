@@ -4,30 +4,30 @@
 
 #pragma once
 
+#include <ddk/mmio-buffer.h>
 #include <ddk/protocol/i2c.h>
 
 #include <ddktl/device.h>
-#include <ddktl/mmio.h>
 #include <ddktl/protocol/i2c-impl.h>
 
+#include <fbl/array.h>
 #include <fbl/atomic.h>
 #include <fbl/unique_ptr.h>
 
 namespace mt8167_i2c {
 
 class Mt8167I2c;
-using DeviceType = ddk::Device<Mt8167I2c, ddk::Unbindable>;
+using DeviceType = ddk::Device<Mt8167I2c>;
 
 class Mt8167I2c : public DeviceType,
                      public ddk::I2cImplProtocol<Mt8167I2c> {
 public:
-    Mt8167I2c(zx_device_t* parent, int dev_cnt)
-        : DeviceType(parent), dev_cnt_(dev_cnt) {}
-
-    zx_status_t Bind(int id);
+    Mt8167I2c(zx_device_t* parent)
+        : DeviceType(parent) {}
+    ~Mt8167I2c();
+    zx_status_t Init();
 
     // Methods required by the ddk mixins
-    void DdkUnbind();
     void DdkRelease();
     uint32_t I2cImplGetBusCount();
     zx_status_t I2cImplGetMaxTransferSize(uint32_t bus_id, size_t* out_size);
@@ -51,10 +51,9 @@ private:
         }
         return "UNKNOWN";
     }
-    const uint32_t dev_cnt_;
-    thrd_t thread_;
-    fbl::unique_ptr<ddk::MmioBuffer> mmio_;
-    fbl::atomic<bool> ready_;
+    uint32_t bus_count_;
+    fbl::Array<mmio_buffer_t> mmios_;
+    mmio_buffer_t xo_mmio_;
 
     void Reset();
     zx_status_t Read(uint8_t addr, void* buf, size_t len, bool stop);
@@ -65,7 +64,5 @@ private:
     zx_status_t TxData(const uint8_t* buf, size_t length, bool stop);
     zx_status_t TxAddress(uint8_t addr, bool is_read);
     zx_status_t WaitFor(Wait type);
-    int Thread();
-    void ShutDown();
 };
 } // namespace mt8167_i2c

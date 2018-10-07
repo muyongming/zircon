@@ -5,6 +5,9 @@
 #pragma once
 
 /* Peripheral Memory */
+#define MT8167_XO_BASE                                      0x10000000
+#define MT8167_XO_SIZE                                      0x624
+
 #define MT8167_GPIO_BASE                                    0x10005000
 #define MT8167_GPIO_SIZE                                    0x700
 
