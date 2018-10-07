@@ -1,6 +1,9 @@
 // Copyright 2018 The Fuchsia Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "mt8167-i2c.h"
+
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
@@ -12,18 +15,15 @@
 #include <ddk/protocol/i2c-impl.h>
 #include <ddk/protocol/platform-bus.h>
 #include <ddk/protocol/platform-device.h>
-
 #include <fbl/alloc_checker.h>
 #include <fbl/auto_call.h>
 #include <fbl/string_printf.h>
-
 #include <lib/zx/time.h>
-
 #include <zircon/assert.h>
 #include <zircon/types.h>
+#include <zircon/syscalls/port.h>
 
 #include "mt8167-i2c-regs.h"
-#include "mt8167-i2c.h"
 
 namespace mt8167_i2c {
 
@@ -216,8 +216,29 @@ zx_status_t Mt8167I2c::Write(uint8_t addr, const void* buf, size_t len, bool sto
     return TxData(static_cast<const uint8_t*>(buf), len, stop);
 }
 
+void Mt8167I2c::DdkUnbind() {
+// TODO stop the thread
+    thrd_join(irq_thread_, NULL);
+}
+
 void Mt8167I2c::DdkRelease() {
     delete this;
+}
+
+void Mt8167I2c::IrqThread() {
+    zx_port_packet_t packet;
+
+    while (1) {
+        auto status = irq_port_.wait(zx::time::infinite(), &packet);
+        if (status != ZX_OK) {
+            zxlogf(ERROR, "%s: irq_port_.wait failed %d \n", __func__, status);
+            break;
+        }
+        auto index = static_cast<size_t>(packet.key);
+        zxlogf(INFO, "GPIO Interrupt %zu triggered\n", index);
+
+        irqs_[index].ack();
+    }
 }
 
 Mt8167I2c::~Mt8167I2c() {
@@ -266,6 +287,37 @@ zx_status_t Mt8167I2c::Init() {
     if (status == ZX_OK) {
         return status;
     }  
+
+    irqs_.reset(new (&ac) zx::interrupt[bus_count_], bus_count_);
+    if (!ac.check()) {
+        return ZX_ERR_NO_MEMORY;
+    }
+
+    status = zx::port::create(ZX_PORT_BIND_TO_INTERRUPT, &irq_port_);
+    if (status == ZX_OK) {
+        return status;
+    }
+
+    for (uint32_t i = 0; i < bus_count_; i++) {
+        status = pdev_map_interrupt(&pdev, i, irqs_[i].reset_and_get_address());
+        if (status == ZX_OK) {
+            return status;
+        }
+        status = irqs_[i].bind(irq_port_.get(), i, 0);
+        if (status == ZX_OK) {
+            return status;
+        }
+    }
+
+    int rc = thrd_create_with_name(&irq_thread_,
+                                   [](void* arg) -> int {
+                                       reinterpret_cast<Mt8167I2c*>(arg)->IrqThread();
+                                       return 0;
+                                   },
+                                   this, "Mt8167I2c::IrqThread");
+    if (rc != thrd_success) {
+        return ZX_ERR_INTERNAL;
+    }
 
     status = DdkAdd("mt8167-i2c");
     if (status != ZX_OK) {

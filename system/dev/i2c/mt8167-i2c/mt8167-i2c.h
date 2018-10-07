@@ -6,18 +6,20 @@
 
 #include <ddk/mmio-buffer.h>
 #include <ddk/protocol/i2c.h>
-
 #include <ddktl/device.h>
 #include <ddktl/protocol/i2c-impl.h>
-
 #include <fbl/array.h>
 #include <fbl/atomic.h>
 #include <fbl/unique_ptr.h>
+#include <lib/zx/interrupt.h>
+#include <lib/zx/port.h>
+
+#include <threads.h>
 
 namespace mt8167_i2c {
 
 class Mt8167I2c;
-using DeviceType = ddk::Device<Mt8167I2c>;
+using DeviceType = ddk::Device<Mt8167I2c, ddk::Unbindable>;
 
 class Mt8167I2c : public DeviceType,
                      public ddk::I2cImplProtocol<Mt8167I2c> {
@@ -28,6 +30,7 @@ public:
     zx_status_t Init();
 
     // Methods required by the ddk mixins
+    void DdkUnbind();
     void DdkRelease();
     uint32_t I2cImplGetBusCount();
     zx_status_t I2cImplGetMaxTransferSize(uint32_t bus_id, size_t* out_size);
@@ -40,20 +43,16 @@ private:
         kIdle,
         kInterruptPending
     };
-    static constexpr const char* WaitStr(Wait type) {
-        switch (type) {
-        case Wait::kBusy:
-            return "BUSY";
-        case Wait::kIdle:
-            return "IDLE";
-        case Wait::kInterruptPending:
-            return "INTERRUPT_PENDING";
-        }
-        return "UNKNOWN";
-    }
+
+    void IrqThread();
+
     uint32_t bus_count_;
     fbl::Array<mmio_buffer_t> mmios_;
     mmio_buffer_t xo_mmio_;
+
+    fbl::Array<zx::interrupt> irqs_;
+    zx::port irq_port_;
+    thrd_t irq_thread_;
 
     void Reset();
     zx_status_t Read(uint8_t addr, void* buf, size_t len, bool stop);
