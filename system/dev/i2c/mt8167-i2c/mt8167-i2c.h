@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <ddk/mmio-buffer.h>
 #include <ddk/protocol/i2c.h>
 #include <ddktl/device.h>
+#include <ddktl/mmio.h>
 #include <ddktl/protocol/i2c-impl.h>
 #include <fbl/array.h>
 #include <fbl/atomic.h>
-#include <fbl/unique_ptr.h>
+#include <fbl/optional.h>
 #include <lib/zx/interrupt.h>
 #include <lib/zx/port.h>
 
@@ -20,13 +20,13 @@ namespace mt8167_i2c {
 
 class Mt8167I2c;
 using DeviceType = ddk::Device<Mt8167I2c, ddk::Unbindable>;
+using MmioBuffer = fbl::optional<ddk::MmioBuffer>;
 
 class Mt8167I2c : public DeviceType,
                      public ddk::I2cImplProtocol<Mt8167I2c> {
 public:
     Mt8167I2c(zx_device_t* parent)
         : DeviceType(parent) {}
-    ~Mt8167I2c();
     zx_status_t Init();
 
     // Methods required by the ddk mixins
@@ -47,8 +47,8 @@ private:
     void IrqThread();
 
     uint32_t bus_count_;
-    fbl::Array<mmio_buffer_t> mmios_;
-    mmio_buffer_t xo_mmio_;
+    fbl::Array<MmioBuffer> mmios_;
+    MmioBuffer xo_mmio_;
 
     fbl::Array<zx::interrupt> irqs_;
     zx::port irq_port_;

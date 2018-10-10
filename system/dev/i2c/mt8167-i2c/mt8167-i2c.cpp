@@ -241,14 +241,6 @@ void Mt8167I2c::IrqThread() {
     }
 }
 
-Mt8167I2c::~Mt8167I2c() {
-    // Do this in the destructor in case we fail before device is added to devmgr.
-    for (mmio_buffer_t& mmio : mmios_) {
-        mmio_buffer_release(&mmio);
-    }
-    mmio_buffer_release(&xo_mmio_);
-}
-
 zx_status_t Mt8167I2c::Init() {
     platform_device_protocol_t pdev;
     if (device_get_protocol(parent(), ZX_PROTOCOL_PLATFORM_DEV, &pdev) != ZX_OK) {
@@ -272,21 +264,24 @@ zx_status_t Mt8167I2c::Init() {
     bus_count_ = info.mmio_count - 1;
 
     fbl::AllocChecker ac;
-    mmios_.reset(new (&ac) mmio_buffer_t[bus_count_], bus_count_);
+    mmios_.reset(new (&ac) MmioBuffer[bus_count_], bus_count_);
     if (!ac.check()) {
         return ZX_ERR_NO_MEMORY;
     }
  
+    mmio_buffer_t mmio_temp;
     for (uint32_t i = 0; i < bus_count_; i++) {
-        status = pdev_map_mmio_buffer2(&pdev, i, ZX_CACHE_POLICY_UNCACHED_DEVICE, &mmios_[i]);
+        status = pdev_map_mmio_buffer2(&pdev, i, ZX_CACHE_POLICY_UNCACHED_DEVICE, &mmio_temp);
         if (status == ZX_OK) {
             return status;
-        }  
-    }      
-    status = pdev_map_mmio_buffer2(&pdev, bus_count_, ZX_CACHE_POLICY_UNCACHED_DEVICE, &xo_mmio_);
+        }
+        mmios_[i] = mmio_temp;
+    }
+    status = pdev_map_mmio_buffer2(&pdev, bus_count_, ZX_CACHE_POLICY_UNCACHED_DEVICE, &mmio_temp);
     if (status == ZX_OK) {
         return status;
-    }  
+    }
+    xo_mmio_ = mmio_temp;
 
     irqs_.reset(new (&ac) zx::interrupt[bus_count_], bus_count_);
     if (!ac.check()) {
