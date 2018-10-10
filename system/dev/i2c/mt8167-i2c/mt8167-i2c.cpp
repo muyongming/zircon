@@ -29,6 +29,46 @@ namespace mt8167_i2c {
 
 constexpr size_t kMaxTransferSize = UINT16_MAX - 1; // More than enough
 
+// TODO - move this to a real clock driver
+// Logic here is based on mt_i2c.c in the bootloader
+void Mt8167I2c::ClockEnable(uint32_t bus_id, bool enable) {
+    if (enable) {
+        uint32_t temp = xo_mmio_->Read32(0x1080);
+        temp &= ~(0x7 << 1);
+        xo_mmio_->Write32(temp, 0x1080);
+
+        switch (bus_id) {
+        case 0:
+            xo_mmio_->Write32((1 << 3), 0x84);
+            break;
+        case 1:
+            xo_mmio_->Write32((1 << 4), 0x84);
+            break;
+        case 2:
+            xo_mmio_->Write32((1 << 16), 0x84);
+            break;
+        default:
+            zxlogf(ERROR, "%s: bad bus_id %u\n", __func__, bus_id);
+            break;
+        }
+    } else {
+        switch (bus_id) {
+        case 0:
+            xo_mmio_->Write32((1 << 3), 0x54);
+            break;
+        case 1:
+            xo_mmio_->Write32((1 << 4), 0x54);
+            break;
+        case 2:
+            xo_mmio_->Write32((1 << 16), 0x54);
+            break;
+        default:
+            zxlogf(ERROR, "%s: bad bus_id %u\n", __func__, bus_id);
+            break;
+        }
+    }
+}
+
 uint32_t Mt8167I2c::I2cImplGetBusCount() {
     return bus_count_;
 }
@@ -262,23 +302,22 @@ zx_status_t Mt8167I2c::Init() {
 
     // Last MMIO is for XO clock.
     bus_count_ = info.mmio_count - 1;
-
     fbl::AllocChecker ac;
     mmios_.reset(new (&ac) MmioBuffer[bus_count_], bus_count_);
     if (!ac.check()) {
         return ZX_ERR_NO_MEMORY;
     }
- 
+
     mmio_buffer_t mmio_temp;
     for (uint32_t i = 0; i < bus_count_; i++) {
         status = pdev_map_mmio_buffer2(&pdev, i, ZX_CACHE_POLICY_UNCACHED_DEVICE, &mmio_temp);
-        if (status == ZX_OK) {
+        if (status != ZX_OK) {
             return status;
         }
         mmios_[i] = mmio_temp;
     }
     status = pdev_map_mmio_buffer2(&pdev, bus_count_, ZX_CACHE_POLICY_UNCACHED_DEVICE, &mmio_temp);
-    if (status == ZX_OK) {
+    if (status != ZX_OK) {
         return status;
     }
     xo_mmio_ = mmio_temp;
@@ -289,17 +328,17 @@ zx_status_t Mt8167I2c::Init() {
     }
 
     status = zx::port::create(ZX_PORT_BIND_TO_INTERRUPT, &irq_port_);
-    if (status == ZX_OK) {
+    if (status != ZX_OK) {
         return status;
     }
 
     for (uint32_t i = 0; i < bus_count_; i++) {
         status = pdev_map_interrupt(&pdev, i, irqs_[i].reset_and_get_address());
-        if (status == ZX_OK) {
+        if (status != ZX_OK) {
             return status;
         }
         status = irqs_[i].bind(irq_port_.get(), i, 0);
-        if (status == ZX_OK) {
+        if (status != ZX_OK) {
             return status;
         }
     }

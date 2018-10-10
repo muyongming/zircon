@@ -44,6 +44,7 @@ private:
         kInterruptPending
     };
 
+    void ClockEnable(uint32_t bus_id, bool enable);
     void IrqThread();
 
     uint32_t bus_count_;
