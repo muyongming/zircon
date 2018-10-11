@@ -84,23 +84,41 @@ zx_status_t Mt8167I2c::I2cImplSetBitRate(uint32_t bus_id, uint32_t bitrate) {
 }
 
 zx_status_t Mt8167I2c::I2cImplTransact(uint32_t bus_id, i2c_impl_op_t* ops, size_t count) {
-    zx_status_t status = ZX_OK;
-    for (size_t i = 0; i < count; ++i) {
-        if (ops[i].address > 0xFF) {
-            return ZX_ERR_NOT_SUPPORTED;
-        }
-        if (ops[i].is_read) {
-            status = Read(static_cast<uint8_t>(ops[i].address), ops[i].buf, ops[i].length,
-                          ops[i].stop);
-        } else {
-            status = Write(static_cast<uint8_t>(ops[i].address), ops[i].buf, ops[i].length,
-                           ops[i].stop);
-        }
-        if (status != ZX_OK) {
-            Reset();
-            return status;
+    if (bus_id >= mmios_.size()) {
+        return ZX_ERR_INVALID_ARGS;
+    }
+
+    bool has_read = false;
+    bool has_write = false;
+    for (size_t i = 0; i < count; i++) {
+        if (ops[i].length) {
+            if (ops[i].is_read) {
+                has_read = true;
+            } else {
+                has_write = true;
+            }
         }
     }
+
+    auto* mmio = &*mmios_[bus_id];
+
+    ClockEnable(bus_id, true);
+// TODO set speed
+
+    // Set ACKERR_DET_EN and CLK_EXT_EN
+    ControlReg::Get().ReadFrom(mmio).set_ackerr_det_en(1).set_clk_ext_en(1).WriteTo(mmio);
+    if (has_read && has_write) {
+        ControlReg::Get().ReadFrom(mmio).set_dir_change(1).WriteTo(mmio);
+    }
+/*
+  if(HS_MODE == i2c->mode || (i2c->trans_data.trans_num > 1 && I2C_TRANS_REPEATED_START == i2c->st_rs)) {
+    i2c->control_reg |= I2C_CONTROL_RS;
+  }
+*/
+
+
+    ClockEnable(bus_id, false);
+
     return ZX_OK;
 }
 

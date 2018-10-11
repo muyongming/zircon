@@ -33,6 +33,13 @@ static const pbus_irq_t dci_irqs[] = {
     },
 };
 
+static const pbus_i2c_channel_t dci_i2cs[] = {
+    {
+        .bus_id = 2,
+        .address = 0x60,
+    },
+};
+
 static const pbus_bti_t dci_btis[] = {
     {
         .iommu_index = 0,
@@ -49,6 +56,8 @@ static pbus_dev_t dci_dev = [](){
     dev.mmio_count = countof(dci_mmios);
     dev.irqs = dci_irqs;
     dev.irq_count = countof(dci_irqs);
+    dev.i2c_channels = dci_i2cs;
+    dev.i2c_channel_count = countof(dci_i2cs);
     dev.btis = dci_btis;
     dev.bti_count = countof(dci_btis);
     return dev;
